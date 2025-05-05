@@ -1,0 +1,6 @@
+__pycache__
+.ipynb_checkpoints
+EngineersGambit
+
+backend/__pycache__
+frontend/node_modules
