@@ -4,17 +4,27 @@ import { applyMove, fromSquare, parseMove } from '../lib/board';
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:5000';
 
+let sharedSocket = null;
+const getSocket = () => {
+  if (!sharedSocket) {
+    sharedSocket = io(SERVER_URL, { transports: ['websocket', 'polling'], autoConnect: false });
+  }
+  return sharedSocket;
+};
+
 const initialState = {
   connected: false,
-  phase: 'idle', // idle | waiting | playing | over
-  mode: null, // 'ai' | 'multiplayer'
+  phase: 'idle',
+  mode: null,
   color: 'white',
   turn: 'white',
   board: null,
   serverBoard: null,
   validMoves: [],
+  serverValidMoves: [],
   history: [],
   lastMove: null,
+  serverLastMove: null,
   hint: null,
   hintLoading: false,
   pending: false,
@@ -31,7 +41,7 @@ function reducer(state, action) {
         ...state,
         connected: action.connected,
         ...(!action.connected && state.phase === 'playing'
-          ? { phase: 'over', result: { kind: 'lost-connection' } }
+          ? { phase: 'over', result: { kind: 'lost-connection' }, pending: false, hintLoading: false }
           : {}),
       };
 
@@ -48,7 +58,7 @@ function reducer(state, action) {
         ...state,
         phase: 'playing',
         mode: action.data.mode,
-        color: action.data.color || 'white',
+        color: action.data.color || state.color,
         turn: action.data.turn || 'white',
       };
 
@@ -60,12 +70,15 @@ function reducer(state, action) {
         board: data.board,
         serverBoard: data.board,
         validMoves: data.valid_moves,
+        serverValidMoves: data.valid_moves,
+        lastMove: state.serverLastMove,
         color: data.color || state.color,
         turn,
         pending: false,
       };
       if (data.valid_moves.length === 0 && state.phase === 'playing') {
         next.phase = 'over';
+        next.hintLoading = false;
         next.result = data.stalemate
           ? { kind: 'stalemate' }
           : { kind: 'checkmate', winner: other(turn), loser: turn };
@@ -80,24 +93,30 @@ function reducer(state, action) {
         lastMove: { from: action.from, to: action.to },
         validMoves: [],
         hint: null,
+        hintLoading: false,
         pending: true,
       };
 
-    case 'move_made':
+    case 'move_made': {
+      const lastMove = parseMove(action.data.move);
       return {
         ...state,
         board: action.data.board,
         serverBoard: action.data.board,
         history: [...state.history, action.data.move],
-        lastMove: parseMove(action.data.move),
+        lastMove,
+        serverLastMove: lastMove,
         turn: other(state.turn),
         hint: null,
       };
+    }
 
     case 'rejected':
       return {
         ...state,
         board: state.serverBoard,
+        validMoves: state.serverValidMoves,
+        lastMove: state.serverLastMove,
         pending: false,
         hintLoading: false,
         notice: action.message,
@@ -107,15 +126,17 @@ function reducer(state, action) {
       return { ...state, hintLoading: true, hint: null };
 
     case 'hint_move':
-      // In online games the server broadcasts hints to the room; only the side to move uses it.
-      return {
-        ...state,
-        hintLoading: false,
-        hint: state.turn === state.color ? parseMove(action.data.move) : state.hint,
-      };
+      if (!state.hintLoading || state.turn !== state.color) return state;
+      return { ...state, hintLoading: false, hint: parseMove(action.data.move) };
 
     case 'opponent_left':
-      return { ...state, phase: 'over', result: state.result || { kind: 'abandoned' } };
+      return {
+        ...state,
+        phase: 'over',
+        pending: false,
+        hintLoading: false,
+        result: state.result || { kind: 'abandoned' },
+      };
 
     case 'dismiss_notice':
       return { ...state, notice: null };
@@ -132,24 +153,28 @@ export function useChessGame() {
   stateRef.current = state;
 
   useEffect(() => {
-    const socket = io(SERVER_URL, { transports: ['websocket', 'polling'] });
+    const socket = getSocket();
     socketRef.current = socket;
 
-    socket.on('connect', () => dispatch({ type: 'connection', connected: true }));
-    socket.on('disconnect', () => dispatch({ type: 'connection', connected: false }));
-    socket.on('game_started', (data) => dispatch({ type: 'game_started', data }));
-    socket.on('valid_moves', (data) => dispatch({ type: 'valid_moves', data }));
-    socket.on('move_made', (data) => dispatch({ type: 'move_made', data }));
-    socket.on('hint_move', (data) => dispatch({ type: 'hint_move', data }));
-    socket.on('invalid_move', (data) => dispatch({ type: 'rejected', message: data.message }));
-    socket.on('error', (data) => dispatch({ type: 'rejected', message: data?.message || 'Server error.' }));
-    socket.on('opponent_disconnected', () => dispatch({ type: 'opponent_left' }));
+    const handlers = {
+      connect: () => dispatch({ type: 'connection', connected: true }),
+      disconnect: () => dispatch({ type: 'connection', connected: false }),
+      game_started: (data) => dispatch({ type: 'game_started', data }),
+      valid_moves: (data) => dispatch({ type: 'valid_moves', data }),
+      move_made: (data) => dispatch({ type: 'move_made', data }),
+      hint_move: (data) => dispatch({ type: 'hint_move', data }),
+      invalid_move: (data) => dispatch({ type: 'rejected', message: data.message }),
+      error: (data) => dispatch({ type: 'rejected', message: data?.message || 'Server error.' }),
+      opponent_disconnected: () => dispatch({ type: 'opponent_left' }),
+    };
 
-    return () => socket.disconnect();
+    Object.entries(handlers).forEach(([event, handler]) => socket.on(event, handler));
+    if (socket.connected) dispatch({ type: 'connection', connected: true });
+    else socket.connect();
+
+    return () => Object.entries(handlers).forEach(([event, handler]) => socket.off(event, handler));
   }, []);
 
-  // A fresh connection gives the server a clean slate: its disconnect handler
-  // drops us from the matchmaking queue and from any running game.
   const resetConnection = useCallback(() => {
     const socket = socketRef.current;
     if (stateRef.current.phase !== 'idle') {
@@ -188,5 +213,5 @@ export function useChessGame() {
 
   const dismissNotice = useCallback(() => dispatch({ type: 'dismiss_notice' }), []);
 
-  return { state, startGame, leaveGame, makeMove, requestHint, dismissNotice, serverUrl: SERVER_URL };
+  return { state, startGame, leaveGame, makeMove, requestHint, dismissNotice };
 }

@@ -7,7 +7,7 @@ function describeResult(result, color) {
     case 'checkmate':
       return {
         title: result.winner === color ? 'You won' : 'You lost',
-        text: `Checkmate — ${cap(result.winner)} wins.`,
+        text: `Checkmate. ${cap(result.winner)} wins.`,
       };
     case 'stalemate':
       return { title: 'Draw', text: 'Stalemate. No legal moves remain.' };
@@ -20,45 +20,47 @@ function describeResult(result, color) {
   }
 }
 
-function statusLine({ phase, mode, turn, color, pending }) {
-  if (phase === 'over') return null;
-  if (turn === color) return pending ? 'Sending move…' : 'Your move';
-  return mode === 'ai' ? 'Engine is thinking…' : 'Waiting for opponent…';
+function statusLine({ mode, turn, color, pending, hintLoading }) {
+  if (turn === color) {
+    if (pending) return 'Sending move…';
+    return hintLoading ? 'Finding the best move…' : 'Your move';
+  }
+  return mode === 'ai' ? 'Engine is thinking…' : 'Waiting for your opponent…';
 }
 
 export default function GamePanel({ state, onHint, onFlip, onNewGame, onLeave }) {
   const { phase, mode, turn, color, history, hintLoading, result } = state;
   const outcome = describeResult(result, color);
-  const status = statusLine(state);
   const myTurn = phase === 'playing' && turn === color && !state.pending;
-  const thinking = status && turn !== color;
+  const busy = phase === 'playing' && (turn !== color || hintLoading);
 
   return (
-    <div className="panel d-flex flex-column">
+    <div className="panel">
       <div className="panel-header d-flex align-items-center">
         <span className="me-auto">{mode === 'ai' ? 'vs Engine' : 'Online game'}</span>
         <span className="text-secondary fw-normal small">Playing {color}</span>
       </div>
 
       {outcome ? (
-        <div className="result px-3 py-3 border-bottom">
+        <div className="status-row result">
           <div className="fw-semibold">{outcome.title}</div>
           <div className="small text-secondary">{outcome.text}</div>
         </div>
       ) : (
-        <div className="px-3 py-2 border-bottom d-flex align-items-center gap-2 small">
-          {thinking ? (
+        <div className="status-row d-flex align-items-center gap-2 small">
+          {busy ? (
             <span className="spinner-grow spinner-grow-sm text-secondary" aria-hidden="true" />
           ) : (
             <span className="turn-dot" aria-hidden="true" />
           )}
-          <span>{status}</span>
+          <span>{statusLine(state)}</span>
         </div>
       )}
 
+      <div className="panel-label">Moves</div>
       <MoveList moves={history} />
 
-      <div className="p-3 border-top d-flex flex-wrap gap-2">
+      <div className="panel-footer d-flex flex-wrap gap-2">
         {phase === 'playing' && (
           <button
             type="button"

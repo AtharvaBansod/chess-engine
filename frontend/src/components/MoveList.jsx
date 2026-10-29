@@ -10,6 +10,7 @@ export default function MoveList({ moves }) {
 
   const rows = [];
   for (let i = 0; i < moves.length; i += 2) rows.push([moves[i], moves[i + 1]]);
+  const lastIndex = moves.length - 1;
 
   return (
     <div className="move-list" ref={scroller}>
@@ -21,8 +22,8 @@ export default function MoveList({ moves }) {
             {rows.map(([white, black], i) => (
               <tr key={i}>
                 <td className="move-no">{i + 1}.</td>
-                <td className={!black && moves.length % 2 === 1 ? 'latest' : ''}>{white}</td>
-                <td className={black && i === rows.length - 1 ? 'latest' : ''}>{black}</td>
+                <td className={lastIndex === i * 2 ? 'latest' : ''}>{white}</td>
+                <td className={lastIndex === i * 2 + 1 ? 'latest' : ''}>{black}</td>
               </tr>
             ))}
           </tbody>

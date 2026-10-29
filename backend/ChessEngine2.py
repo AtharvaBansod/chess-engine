@@ -1,3 +1,9 @@
+ORTHOGONAL = ((-1, 0), (1, 0), (0, -1), (0, 1))
+DIAGONAL = ((-1, -1), (-1, 1), (1, -1), (1, 1))
+KING_OFFSETS = ORTHOGONAL + DIAGONAL
+KNIGHT_OFFSETS = ((-2, -1), (-2, 1), (-1, -2), (-1, 2), (1, -2), (1, 2), (2, -1), (2, 1))
+
+
 class GameState:
     def __init__(self):
         
@@ -184,15 +190,32 @@ class GameState:
             return self.squareUnderAttack(self.black_king_location[0], self.black_king_location[1])
 
     def squareUnderAttack(self, row, col):
-        """
-        Determine if enemy can attack the square row col
-        """
-        self.white_to_move = not self.white_to_move  # switch to opponent's point of view
-        opponents_moves = self.getAllPossibleMoves()
-        self.white_to_move = not self.white_to_move
-        for move in opponents_moves:
-            if move.end_row == row and move.end_col == col:  # square is under attack
+        enemy = "b" if self.white_to_move else "w"
+        board = self.board
+        for dr, dc in KNIGHT_OFFSETS:
+            r, c = row + dr, col + dc
+            if 0 <= r <= 7 and 0 <= c <= 7 and board[r][c] == enemy + "N":
                 return True
+        pawn_row = row - 1 if enemy == "b" else row + 1
+        if 0 <= pawn_row <= 7:
+            for c in (col - 1, col + 1):
+                if 0 <= c <= 7 and board[pawn_row][c] == enemy + "p":
+                    return True
+        for dr, dc in KING_OFFSETS:
+            r, c = row + dr, col + dc
+            if 0 <= r <= 7 and 0 <= c <= 7 and board[r][c] == enemy + "K":
+                return True
+        for directions, sliders in ((ORTHOGONAL, "RQ"), (DIAGONAL, "BQ")):
+            for dr, dc in directions:
+                r, c = row + dr, col + dc
+                while 0 <= r <= 7 and 0 <= c <= 7:
+                    square = board[r][c]
+                    if square != "--":
+                        if square[0] == enemy and square[1] in sliders:
+                            return True
+                        break
+                    r += dr
+                    c += dc
         return False
 
     def getAllPossibleMoves(self):
@@ -527,8 +550,9 @@ class GameState:
 
             # undo castle rights
             self.castle_rights_log.pop()  # get rid of the new castle rights from the move we are undoing
-            self.current_castling_rights = self.castle_rights_log[
-                -1]  # set the current castle rights to the last one in the list
+            last_rights = self.castle_rights_log[-1]
+            self.current_castling_rights = CastleRights(last_rights.wks, last_rights.bks,
+                                                        last_rights.wqs, last_rights.bqs)
             # undo the castle move
             if move.is_castle_move:
                 if move.end_col - move.start_col == 2:  # king-side

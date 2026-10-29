@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 import { Chessboard } from 'react-chessboard';
 import { findKing, indexMoves, toPosition } from '../lib/board';
 
@@ -19,19 +19,14 @@ const styles = {
   mated: { background: 'radial-gradient(circle, rgba(192, 57, 43, 0.85) 0%, rgba(192, 57, 43, 0.25) 70%)' },
 };
 
-function GameBoard({ board, validMoves, orientation, interactive, lastMove, hint, result, onMove }) {
+const lightSquare = { backgroundColor: LIGHT };
+const darkSquare = { backgroundColor: DARK };
+const dropSquare = { boxShadow: 'inset 0 0 0 3px rgba(47, 93, 80, 0.7)' };
+const boardStyle = { borderRadius: '6px', overflow: 'hidden' };
+const noPromotionDialog = () => false;
+
+function GameBoard({ size, board, validMoves, orientation, interactive, lastMove, hint, result, onMove }) {
   const [selected, setSelected] = useState(null);
-  const [width, setWidth] = useState(0);
-  const frameRef = useRef(null);
-
-  // Size the board to its column; the library's own auto-sizing doesn't fire reliably.
-  useEffect(() => {
-    const el = frameRef.current;
-    const observer = new ResizeObserver(([entry]) => setWidth(Math.floor(entry.contentRect.width)));
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
-
   const moveMap = useMemo(() => indexMoves(validMoves), [validMoves]);
   const position = useMemo(() => toPosition(board), [board]);
   const myColour = orientation[0];
@@ -78,11 +73,11 @@ function GameBoard({ board, validMoves, orientation, interactive, lastMove, hint
   };
 
   return (
-    <div className="board-frame" ref={frameRef}>
-      {width > 0 && (
+    <div className="board-frame">
+      {size > 0 && (
         <Chessboard
           id="main-board"
-          boardWidth={width}
+          boardWidth={size}
           position={position}
           boardOrientation={orientation}
           arePiecesDraggable={interactive}
@@ -90,14 +85,14 @@ function GameBoard({ board, validMoves, orientation, interactive, lastMove, hint
           onPieceDragBegin={(_, square) => setSelected(square)}
           onPieceDrop={handleDrop}
           onSquareClick={handleSquareClick}
-          onPromotionCheck={() => false}
+          onPromotionCheck={noPromotionDialog}
           customSquareStyles={squareStyles}
           customArrows={arrows}
           areArrowsAllowed={false}
-          customLightSquareStyle={{ backgroundColor: LIGHT }}
-          customDarkSquareStyle={{ backgroundColor: DARK }}
-          customDropSquareStyle={{ boxShadow: 'inset 0 0 0 3px rgba(47, 93, 80, 0.7)' }}
-          customBoardStyle={{ borderRadius: '6px', overflow: 'hidden' }}
+          customLightSquareStyle={lightSquare}
+          customDarkSquareStyle={darkSquare}
+          customDropSquareStyle={dropSquare}
+          customBoardStyle={boardStyle}
           animationDuration={180}
         />
       )}

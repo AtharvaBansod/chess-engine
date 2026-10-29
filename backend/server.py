@@ -1,343 +1,251 @@
-# from flask import Flask, request
-# from flask_socketio import SocketIO, emit
-# from ChessEngine2 import GameState  
-# from minMax import findBestMove  
-# from ChessEngine2 import Move 
-# from flask_cors import CORS
-
-# app = Flask(__name__)
-# CORS(app)
-# socketio = SocketIO(app, cors_allowed_origins="*")
-
-# game_instances = {}
-
-# @app.route('/')
-# def home():
-#     return "Chess Server !"
-
-# @socketio.on('connect')
-# def handle_connect():
-#     print(f"User connected: {request.sid}")
-
-
-# @socketio.on('join_game')
-# def handle_join_game():
-#     user_id = request.sid
-#     gs = GameState()  
-#     game_instances[user_id] = gs
-    
-#     valid_moves = [{'start_sq': [move.start_row, move.start_col], 'end_sq': [move.end_row, move.end_col]} for move in gs.getValidMoves()]
-#     emit('valid_moves', {'valid_moves': valid_moves, 'board': gs.board}, room=user_id)
-#     emit('game_started', {'message': 'Game against AI has started!'}, room=user_id)
-#     print(valid_moves)
-
-# @socketio.on('make_move')
-# def handle_make_move(data):
-#     user_id = request.sid
-#     player_move_data = data.get('move')  
-#     gs = game_instances.get(user_id)  
-
-#     if gs:
-#         player_move = Move(player_move_data['start_sq'], player_move_data['end_sq'], gs.board)
-        
-#         if player_move in gs.getValidMoves():
-#             gs.makeMove(player_move)
-            
-#             emit('move_made', {'move': player_move.getChessNotation(), 'board': gs.board}, room=user_id)
-            
-            
-#             ai_move = findBestMove(gs, gs.getValidMoves())
-#             gs.makeMove(ai_move)
-            
-            
-#             emit('move_made', {'move': ai_move.getChessNotation(), 'board': gs.board}, room=user_id)
-
-            
-#             valid_moves = [{'start_sq': [move.start_row, move.start_col], 'end_sq': [move.end_row, move.end_col]} for move in gs.getValidMoves()]
-
-            
-#             emit('valid_moves', {'valid_moves': valid_moves, 'board': gs.board}, room=user_id)
-#         else:
-#             emit('invalid_move', {'message': 'Invalid move! Try again.'}, room=user_id)
-#     print("Move made by user")
-
-
-# @socketio.on('disconnect')
-# def handle_disconnect():
-#     user_id = request.sid
-#     if user_id in game_instances:
-#         del game_instances[user_id] 
-#     print(f"User disconnected: {user_id}")
-
-
-# if __name__ == '__main__':
-#     socketio.run(app,debug=True,port=5000)
-#     print("Server Running...")
-
-
-
-from flask import Flask, request
-from flask_socketio import SocketIO, emit, join_room, leave_room
-from ChessEngine2 import GameState  # Your custom GameState class
-from minMax import findBestMove  # AI logic for best move
-from ChessEngine2 import Move  # Assuming Move class is in move.py
-from flask_cors import CORS
+import copy
+import threading
 import uuid
 
-# Initialize Flask app and SocketIO
+from flask import Flask, request
+from flask_cors import CORS
+from flask_socketio import SocketIO, emit, join_room, leave_room
+
+from ChessEngine2 import GameState
+from minMax import HINT_TIME, SEARCH_TIME, SearchCancelled, findBestMove
+
 app = Flask(__name__)
 CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*", manage_session=False)
 
-# Global variables to store game instances and multiplayer data
-game_instances = {}        # For AI games: {user_id: GameState}
-multiplayer_games = {}     # For Multiplayer: {game_id: {'players': [player1_id, player2_id], 'game_state': GameState, 'turn': 'white'}}
-waiting_players = []       # Queue for multiplayer matchmaking
+game_instances = {}
+multiplayer_games = {}
+waiting_players = []
+game_locks = {}
+hint_searches = {}
+
+
+def color_to_move(gs):
+    return 'white' if gs.white_to_move else 'black'
+
+
+def state_payload(gs, valid_moves, **extra):
+    payload = {
+        'valid_moves': [
+            {'start_sq': [m.start_row, m.start_col], 'end_sq': [m.end_row, m.end_col]}
+            for m in valid_moves
+        ],
+        'board': gs.board,
+        'turn': color_to_move(gs),
+        'checkmate': gs.checkmate,
+        'stalemate': gs.stalemate,
+    }
+    payload.update(extra)
+    return payload
+
+
+def match_valid_move(gs, move_data):
+    try:
+        start = (int(move_data['start_sq'][0]), int(move_data['start_sq'][1]))
+        end = (int(move_data['end_sq'][0]), int(move_data['end_sq'][1]))
+    except (KeyError, IndexError, TypeError, ValueError):
+        return None
+    for move in gs.getValidMoves():
+        if (move.start_row, move.start_col) == start and (move.end_row, move.end_col) == end:
+            return move
+    return None
+
+
+def cancel_hint(user_id):
+    event = hint_searches.pop(user_id, None)
+    if event is not None:
+        event.set()
+
+
+def find_multiplayer_game(user_id):
+    for game_id, game in multiplayer_games.items():
+        if user_id in game['players']:
+            return game_id, game
+    return None, None
+
 
 @app.route('/')
 def home():
     return "Chess Server!"
 
+
 @socketio.on('connect')
 def handle_connect():
     print(f"User connected: {request.sid}")
 
+
 @socketio.on('join_game')
 def handle_join_game():
     user_id = request.sid
+    cancel_hint(user_id)
     gs = GameState()
     game_instances[user_id] = gs
+    game_locks[user_id] = threading.Lock()
+    emit('valid_moves', state_payload(gs, gs.getValidMoves(), color='white'), room=user_id)
+    emit('game_started', {'message': 'Game against AI has started!', 'mode': 'ai', 'color': 'white',
+                          'turn': 'white'}, room=user_id)
 
-    # Emit initial valid moves and the board state to the player
-    valid_moves = [
-        {'start_sq': [move.start_row, move.start_col], 'end_sq': [move.end_row, move.end_col]}
-        for move in gs.getValidMoves()
-    ]
-    emit('valid_moves', {'valid_moves': valid_moves, 'board': gs.board}, room=user_id)
-    emit('game_started', {'message': 'Game against AI has started!', 'mode': 'ai', 'color': 'white'}, room=user_id)
-    print(f"AI game started for user {user_id} with valid moves: {valid_moves}")
 
 @socketio.on('join_multiplayer')
 def handle_join_multiplayer():
     user_id = request.sid
+    if user_id in waiting_players:
+        return
     waiting_players.append(user_id)
-    print(f"User {user_id} added to multiplayer queue.")
 
-    # If two players are waiting, start a multiplayer game
-    if len(waiting_players) >= 2:
-        player1 = waiting_players.pop(0)
-        player2 = waiting_players.pop(0)
+    if len(waiting_players) < 2:
+        return
 
-        # Create a unique game ID
-        game_id = str(uuid.uuid4())
+    player1 = waiting_players.pop(0)
+    player2 = waiting_players.pop(0)
+    game_id = str(uuid.uuid4())
+    gs = GameState()
+    multiplayer_games[game_id] = {'players': [player1, player2], 'game_state': gs}
+    game_locks[game_id] = threading.Lock()
+    join_room(game_id, player1)
+    join_room(game_id, player2)
 
-        # Initialize a new GameState for the multiplayer game
-        gs = GameState()
-        multiplayer_games[game_id] = {
-            'players': [player1, player2],
-            'game_state': gs,
-            'turn': 'white'  # White starts first
-        }
+    valid_moves = gs.getValidMoves()
+    for player, color in ((player1, 'white'), (player2, 'black')):
+        emit('valid_moves', state_payload(gs, valid_moves, color=color), room=player)
+        emit('game_started', {
+            'message': 'Multiplayer match has started!',
+            'mode': 'multiplayer',
+            'color': color,
+            'opponent': player2 if player == player1 else player1,
+            'turn': 'white',
+        }, room=player)
 
-        # Assign colors
-        player_colors = {player1: 'white', player2: 'black'}
 
-        # Join both players to a room identified by game_id
-        join_room(game_id, player1)
-        join_room(game_id, player2)
+def play_ai_move(user_id, move_data):
+    gs = game_instances.get(user_id)
+    if not gs:
+        emit('error', {'message': 'Game state not found.'}, room=user_id)
+        return
 
-        # Emit initial game state to both players
-        for player in [player1, player2]:
-            emit('valid_moves', {
-                'valid_moves': [
-                    {'start_sq': [move.start_row, move.start_col], 'end_sq': [move.end_row, move.end_col]}
-                    for move in gs.getValidMoves()
-                ],
-                'board': gs.board,
-                'color': player_colors[player],
-                'turn': 'white'
-            }, room=player)
+    with game_locks[user_id]:
+        if not gs.white_to_move:
+            emit('invalid_move', {'message': 'Wait for the engine to move.'}, room=user_id)
+            return
+        player_move = match_valid_move(gs, move_data)
+        if player_move is None:
+            emit('invalid_move', {'message': 'Invalid move! Try again.'}, room=user_id)
+            emit('valid_moves', state_payload(gs, gs.getValidMoves()), room=user_id)
+            return
 
-            emit('game_started', {
-                'message': 'Multiplayer match has started!',
-                'mode': 'multiplayer',
-                'color': player_colors[player],
-                'opponent': player2 if player == player1 else player1,
-                'turn': 'white'
-            }, room=player)
+        gs.makeMove(player_move)
+        emit('move_made', {'move': player_move.getChessNotation(), 'board': gs.board}, room=user_id)
 
-        print(f"Multiplayer game {game_id} started between {player1} (white) and {player2} (black).")
+        ai_replies = gs.getValidMoves()
+        if not ai_replies:
+            emit('valid_moves', state_payload(gs, []), room=user_id)
+            return
+
+        ai_move = findBestMove(gs, ai_replies, time_limit=SEARCH_TIME) or ai_replies[0]
+        gs.makeMove(ai_move)
+        emit('move_made', {'move': ai_move.getChessNotation(), 'board': gs.board}, room=user_id)
+        emit('valid_moves', state_payload(gs, gs.getValidMoves()), room=user_id)
+
+
+def play_multiplayer_move(user_id, move_data):
+    game_id, game = find_multiplayer_game(user_id)
+    if not game:
+        emit('error', {'message': 'Multiplayer game not found.'}, room=user_id)
+        return
+
+    with game_locks[game_id]:
+        gs = game['game_state']
+        player_color = 'white' if game['players'][0] == user_id else 'black'
+        if color_to_move(gs) != player_color:
+            emit('invalid_move', {'message': 'Not your turn!'}, room=user_id)
+            return
+
+        player_move = match_valid_move(gs, move_data)
+        if player_move is None:
+            emit('invalid_move', {'message': 'Invalid move! Try again.'}, room=user_id)
+            emit('valid_moves', state_payload(gs, gs.getValidMoves()), room=user_id)
+            return
+
+        gs.makeMove(player_move)
+        emit('move_made', {'move': player_move.getChessNotation(), 'board': gs.board}, room=game_id)
+        emit('valid_moves', state_payload(gs, gs.getValidMoves()), room=game_id)
+
 
 @socketio.on('make_move')
 def handle_make_move(data):
     user_id = request.sid
-    move_data = data.get('move')  # Data of the move sent by the client
-    mode = data.get('mode')  # 'ai' or 'multiplayer'
+    cancel_hint(user_id)
+    data = data or {}
+    if data.get('mode') == 'multiplayer':
+        play_multiplayer_move(user_id, data.get('move'))
+    else:
+        play_ai_move(user_id, data.get('move'))
 
-    if mode == 'ai':
-        # Handle single-player (AI) game moves
-        gs = game_instances.get(user_id)
-        if not gs:
-            emit('error', {'message': 'Game state not found.'}, room=user_id)
-            return
 
-        player_move = Move(move_data['start_sq'], move_data['end_sq'], gs.board)
+@socketio.on('cancel_hint')
+def handle_cancel_hint():
+    cancel_hint(request.sid)
 
-        if player_move in gs.getValidMoves():
-            gs.makeMove(player_move)
-            emit('move_made', {'move': player_move.getChessNotation(), 'board': gs.board}, room=user_id)
-
-            # Game over after the player's move: nothing for the AI to play
-            ai_replies = gs.getValidMoves()
-            if not ai_replies:
-                emit('valid_moves', {'valid_moves': [], 'board': gs.board, 'turn': 'black',
-                                     'checkmate': gs.checkmate, 'stalemate': gs.stalemate}, room=user_id)
-                return
-
-            # AI makes its move
-            ai_move = findBestMove(gs, ai_replies) or ai_replies[0]
-            gs.makeMove(ai_move)
-            emit('move_made', {'move': ai_move.getChessNotation(), 'board': gs.board}, room=user_id)
-
-            # Send updated valid moves
-            valid_moves = [
-                {'start_sq': [move.start_row, move.start_col], 'end_sq': [move.end_row, move.end_col]}
-                for move in gs.getValidMoves()
-            ]
-            emit('valid_moves', {'valid_moves': valid_moves, 'board': gs.board, 'turn': 'white',
-                                 'checkmate': gs.checkmate, 'stalemate': gs.stalemate}, room=user_id)
-        else:
-            emit('invalid_move', {'message': 'Invalid move! Try again.'}, room=user_id)
-
-        print(f"AI game move by user {user_id}: {player_move.getChessNotation()}")
-
-    elif mode == 'multiplayer':
-        # Handle multiplayer game moves
-        game_id = None
-        for gid, game in multiplayer_games.items():
-            if user_id in game['players']:
-                game_id = gid
-                break
-
-        if not game_id:
-            emit('error', {'message': 'Multiplayer game not found.'}, room=user_id)
-            return
-
-        game = multiplayer_games[game_id]
-        gs = game['game_state']
-        current_turn = game['turn']
-        player_index = game['players'].index(user_id)
-        player_color = 'white' if player_index == 0 else 'black'
-
-        if (current_turn == 'white' and player_color != 'white') or (current_turn == 'black' and player_color != 'black'):
-            emit('invalid_move', {'message': 'Not your turn!'}, room=user_id)
-            return
-
-        player_move = Move(move_data['start_sq'], move_data['end_sq'], gs.board)
-
-        if player_move in gs.getValidMoves():
-            gs.makeMove(player_move)
-            emit('move_made', {'move': player_move.getChessNotation(), 'board': gs.board}, room=game_id)
-
-            # Toggle turn
-            game['turn'] = 'black' if game['turn'] == 'white' else 'white'
-
-            # Send updated valid moves and turn to both players
-            valid_moves = [
-                {'start_sq': [move.start_row, move.start_col], 'end_sq': [move.end_row, move.end_col]}
-                for move in gs.getValidMoves()
-            ]
-            emit('valid_moves', {'valid_moves': valid_moves, 'board': gs.board, 'turn': game['turn'],
-                                 'checkmate': gs.checkmate, 'stalemate': gs.stalemate}, room=game_id)
-        else:
-            emit('invalid_move', {'message': 'Invalid move! Try again.'}, room=user_id)
-
-        print(f"Multiplayer game {game_id} move by user {user_id}: {player_move.getChessNotation()}")
 
 @socketio.on('hint')
 def handle_hint(data):
     user_id = request.sid
-    mode = data.get('mode')  # 'ai' or 'multiplayer'
+    mode = (data or {}).get('mode')
 
-    if mode == 'ai':
-        # Provide hint in single-player (AI) game
+    if mode == 'multiplayer':
+        game_id, game = find_multiplayer_game(user_id)
+        gs = game['game_state'] if game else None
+        lock = game_locks.get(game_id)
+    else:
         gs = game_instances.get(user_id)
-        if not gs:
-            emit('error', {'message': 'Game state not found.'}, room=user_id)
-            return
+        lock = game_locks.get(user_id)
 
-        # Determine whose turn it is based on the board state
-        white_to_move = gs.white_to_move
+    if not gs or not lock:
+        emit('error', {'message': 'Game state not found.'}, room=user_id)
+        return
 
-        # Get the best move (AI hint) for the current turn
-        candidate_moves = gs.getValidMoves()
-        if not candidate_moves:
-            return
-        hint_move = findBestMove(gs, candidate_moves) or candidate_moves[0]
+    with lock:
+        snapshot = copy.deepcopy(gs)
+    candidates = snapshot.getValidMoves()
+    if not candidates:
+        return
 
-        # Emit the AI hint move back to the user
-        emit('hint_move', {'move': hint_move.getChessNotation(), 'white_to_move': white_to_move}, room=user_id)
+    cancel_hint(user_id)
+    stop = threading.Event()
+    hint_searches[user_id] = stop
+    try:
+        hint_move = findBestMove(snapshot, candidates, should_stop=stop.is_set,
+                                   time_limit=HINT_TIME) or candidates[0]
+    except SearchCancelled:
+        return
+    finally:
+        if hint_searches.get(user_id) is stop:
+            del hint_searches[user_id]
 
-        print(f"AI hint for user {user_id}: {hint_move.getChessNotation()}")
+    if not stop.is_set():
+        emit('hint_move', {'move': hint_move.getChessNotation(), 'turn': color_to_move(snapshot)}, room=user_id)
 
-    elif mode == 'multiplayer':
-        # Provide hint in multiplayer game
-        game_id = None
-        for gid, game in multiplayer_games.items():
-            if user_id in game['players']:
-                game_id = gid
-                break
-
-        if not game_id:
-            emit('error', {'message': 'Multiplayer game not found.'}, room=user_id)
-            return
-
-        game = multiplayer_games[game_id]
-        gs = game['game_state']
-        current_turn = game['turn']
-
-        # Get the best move (AI hint) for the current turn
-        candidate_moves = gs.getValidMoves()
-        if not candidate_moves:
-            return
-        hint_move = findBestMove(gs, candidate_moves) or candidate_moves[0]
-
-        # Emit the AI hint move to both players
-        emit('hint_move', {'move': hint_move.getChessNotation(), 'turn': current_turn}, room=game_id)
-
-        print(f"Multiplayer game {game_id} hint: {hint_move.getChessNotation()}")
 
 @socketio.on('disconnect')
 def handle_disconnect():
     user_id = request.sid
+    cancel_hint(user_id)
+    game_instances.pop(user_id, None)
+    game_locks.pop(user_id, None)
 
-    # Remove from AI game instances
-    if user_id in game_instances:
-        del game_instances[user_id]
-        print(f"AI game removed for user {user_id}")
-
-    # Remove from waiting multiplayer players
     if user_id in waiting_players:
         waiting_players.remove(user_id)
-        print(f"User {user_id} removed from multiplayer queue.")
 
-    # Remove from multiplayer games
-    game_id_to_remove = None
-    for gid, game in multiplayer_games.items():
-        if user_id in game['players']:
-            # Notify the other player
-            other_player = game['players'][0] if game['players'][1] == user_id else game['players'][1]
-            emit('opponent_disconnected', {'message': 'Your opponent has disconnected.'}, room=other_player)
-            leave_room(gid, other_player)
-            game_id_to_remove = gid
-            break
-
-    if game_id_to_remove:
-        del multiplayer_games[game_id_to_remove]
-        print(f"Multiplayer game {game_id_to_remove} ended due to disconnection of user {user_id}.")
+    game_id, game = find_multiplayer_game(user_id)
+    if game:
+        other_player = next(p for p in game['players'] if p != user_id)
+        emit('opponent_disconnected', {'message': 'Your opponent has disconnected.'}, room=other_player)
+        leave_room(game_id, other_player)
+        del multiplayer_games[game_id]
+        game_locks.pop(game_id, None)
 
     print(f"User disconnected: {user_id}")
 
+
 if __name__ == '__main__':
     socketio.run(app, debug=True, port=5000)
-    print("Server Running...")
