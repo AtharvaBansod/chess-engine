@@ -74,7 +74,7 @@ export default function App() {
 
       <main className="container flex-grow-1 py-4">
         <div className="row g-4 justify-content-center">
-          <section className="col-lg-7 col-xl-6" aria-label="Board">
+          <section className="col-lg-7 col-xl-6 board-column" aria-label="Board">
             {renderBar(topColor)}
             <GameBoard
               board={board}

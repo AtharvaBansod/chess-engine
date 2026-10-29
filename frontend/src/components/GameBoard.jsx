@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { Chessboard } from 'react-chessboard';
 import { findKing, indexMoves, toPosition } from '../lib/board';
 
@@ -21,6 +21,17 @@ const styles = {
 
 function GameBoard({ board, validMoves, orientation, interactive, lastMove, hint, result, onMove }) {
   const [selected, setSelected] = useState(null);
+  const [width, setWidth] = useState(0);
+  const frameRef = useRef(null);
+
+  // Size the board to its column; the library's own auto-sizing doesn't fire reliably.
+  useEffect(() => {
+    const el = frameRef.current;
+    const observer = new ResizeObserver(([entry]) => setWidth(Math.floor(entry.contentRect.width)));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
   const moveMap = useMemo(() => indexMoves(validMoves), [validMoves]);
   const position = useMemo(() => toPosition(board), [board]);
   const myColour = orientation[0];
@@ -67,26 +78,29 @@ function GameBoard({ board, validMoves, orientation, interactive, lastMove, hint
   };
 
   return (
-    <div className="board-frame">
-      <Chessboard
-        id="main-board"
-        position={position}
-        boardOrientation={orientation}
-        arePiecesDraggable={interactive}
-        isDraggablePiece={({ piece }) => interactive && piece[0] === myColour}
-        onPieceDragBegin={(_, square) => setSelected(square)}
-        onPieceDrop={handleDrop}
-        onSquareClick={handleSquareClick}
-        onPromotionCheck={() => false}
-        customSquareStyles={squareStyles}
-        customArrows={arrows}
-        areArrowsAllowed={false}
-        customLightSquareStyle={{ backgroundColor: LIGHT }}
-        customDarkSquareStyle={{ backgroundColor: DARK }}
-        customDropSquareStyle={{ boxShadow: 'inset 0 0 0 3px rgba(47, 93, 80, 0.7)' }}
-        customBoardStyle={{ borderRadius: '6px', overflow: 'hidden' }}
-        animationDuration={180}
-      />
+    <div className="board-frame" ref={frameRef}>
+      {width > 0 && (
+        <Chessboard
+          id="main-board"
+          boardWidth={width}
+          position={position}
+          boardOrientation={orientation}
+          arePiecesDraggable={interactive}
+          isDraggablePiece={({ piece }) => interactive && piece[0] === myColour}
+          onPieceDragBegin={(_, square) => setSelected(square)}
+          onPieceDrop={handleDrop}
+          onSquareClick={handleSquareClick}
+          onPromotionCheck={() => false}
+          customSquareStyles={squareStyles}
+          customArrows={arrows}
+          areArrowsAllowed={false}
+          customLightSquareStyle={{ backgroundColor: LIGHT }}
+          customDarkSquareStyle={{ backgroundColor: DARK }}
+          customDropSquareStyle={{ boxShadow: 'inset 0 0 0 3px rgba(47, 93, 80, 0.7)' }}
+          customBoardStyle={{ borderRadius: '6px', overflow: 'hidden' }}
+          animationDuration={180}
+        />
+      )}
     </div>
   );
 }

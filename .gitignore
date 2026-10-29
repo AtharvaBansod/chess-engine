@@ -4,3 +4,4 @@ EngineersGambit
 
 backend/__pycache__
 frontend/node_modules
+backend/.venv
