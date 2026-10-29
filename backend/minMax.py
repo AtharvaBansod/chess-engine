@@ -172,6 +172,8 @@ def findBestMove(gs, validMoves, depth=DEPTH, should_stop=None, time_limit=None,
 def negaMaxAlphaBeta(gs, depth, alpha, beta, turn, should_stop=None):
     if should_stop is not None and should_stop():
         raise SearchCancelled()
+    if gs.repetitionCount() >= 2:
+        return STALEMATE
     if depth == 0:
         return turn * scoreBoard(gs)
 

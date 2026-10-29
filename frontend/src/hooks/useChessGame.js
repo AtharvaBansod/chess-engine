@@ -79,9 +79,9 @@ function reducer(state, action) {
       if (data.valid_moves.length === 0 && state.phase === 'playing') {
         next.phase = 'over';
         next.hintLoading = false;
-        next.result = data.stalemate
-          ? { kind: 'stalemate' }
-          : { kind: 'checkmate', winner: other(turn), loser: turn };
+        if (data.repetition) next.result = { kind: 'repetition' };
+        else if (data.stalemate) next.result = { kind: 'stalemate' };
+        else next.result = { kind: 'checkmate', winner: other(turn), loser: turn };
       }
       return next;
     }

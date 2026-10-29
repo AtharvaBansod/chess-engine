@@ -24,16 +24,22 @@ def color_to_move(gs):
     return 'white' if gs.white_to_move else 'black'
 
 
+def is_game_over(gs, valid_moves):
+    return not valid_moves or gs.isThreefoldRepetition()
+
+
 def state_payload(gs, valid_moves, **extra):
+    repetition = gs.isThreefoldRepetition()
     payload = {
-        'valid_moves': [
+        'valid_moves': [] if repetition else [
             {'start_sq': [m.start_row, m.start_col], 'end_sq': [m.end_row, m.end_col]}
             for m in valid_moves
         ],
         'board': gs.board,
         'turn': color_to_move(gs),
-        'checkmate': gs.checkmate,
-        'stalemate': gs.stalemate,
+        'checkmate': gs.checkmate and not repetition,
+        'stalemate': gs.stalemate and not repetition,
+        'repetition': repetition,
     }
     payload.update(extra)
     return payload
@@ -124,6 +130,9 @@ def play_ai_move(user_id, move_data):
         return
 
     with game_locks[user_id]:
+        if gs.isThreefoldRepetition():
+            emit('invalid_move', {'message': 'The game is over.'}, room=user_id)
+            return
         if not gs.white_to_move:
             emit('invalid_move', {'message': 'Wait for the engine to move.'}, room=user_id)
             return
@@ -137,7 +146,7 @@ def play_ai_move(user_id, move_data):
         emit('move_made', {'move': player_move.getChessNotation(), 'board': gs.board}, room=user_id)
 
         ai_replies = gs.getValidMoves()
-        if not ai_replies:
+        if is_game_over(gs, ai_replies):
             emit('valid_moves', state_payload(gs, []), room=user_id)
             return
 
@@ -156,6 +165,9 @@ def play_multiplayer_move(user_id, move_data):
     with game_locks[game_id]:
         gs = game['game_state']
         player_color = 'white' if game['players'][0] == user_id else 'black'
+        if gs.isThreefoldRepetition():
+            emit('invalid_move', {'message': 'The game is over.'}, room=user_id)
+            return
         if color_to_move(gs) != player_color:
             emit('invalid_move', {'message': 'Not your turn!'}, room=user_id)
             return
@@ -207,7 +219,7 @@ def handle_hint(data):
     with lock:
         snapshot = copy.deepcopy(gs)
     candidates = snapshot.getValidMoves()
-    if not candidates:
+    if is_game_over(snapshot, candidates):
         return
 
     cancel_hint(user_id)

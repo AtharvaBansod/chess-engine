@@ -32,6 +32,8 @@ class GameState:
         self.current_castling_rights = CastleRights(True, True, True, True)
         self.castle_rights_log = [CastleRights(self.current_castling_rights.wks, self.current_castling_rights.bks,
                                                self.current_castling_rights.wqs, self.current_castling_rights.bqs)]
+        self.position_log = [self.positionKey()]
+        self.position_counts = {self.position_log[0]: 1}
 
     def makeMove(self, move):
         
@@ -80,7 +82,23 @@ class GameState:
         self.updateCastleRights(move)
         self.castle_rights_log.append(CastleRights(self.current_castling_rights.wks, self.current_castling_rights.bks,
                                                    self.current_castling_rights.wqs, self.current_castling_rights.bqs))
+        key = self.positionKey()
+        self.position_log.append(key)
+        self.position_counts[key] = self.position_counts.get(key, 0) + 1
 
+
+    def positionKey(self):
+        rights = self.current_castling_rights
+        return ("".join("".join(rank) for rank in self.board),
+                self.white_to_move,
+                (rights.wks, rights.wqs, rights.bks, rights.bqs),
+                self.enpassant_possible)
+
+    def repetitionCount(self):
+        return self.position_counts.get(self.position_log[-1], 0)
+
+    def isThreefoldRepetition(self):
+        return self.repetitionCount() >= 3
 
     def updateCastleRights(self, move):
         """
@@ -549,6 +567,11 @@ class GameState:
             self.enpassant_possible = self.enpassant_possible_log[-1]
 
             # undo castle rights
+            key = self.position_log.pop()
+            self.position_counts[key] -= 1
+            if self.position_counts[key] == 0:
+                del self.position_counts[key]
+
             self.castle_rights_log.pop()  # get rid of the new castle rights from the move we are undoing
             last_rights = self.castle_rights_log[-1]
             self.current_castling_rights = CastleRights(last_rights.wks, last_rights.bks,

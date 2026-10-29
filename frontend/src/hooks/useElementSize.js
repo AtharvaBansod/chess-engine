@@ -1,18 +1,31 @@
-import { useEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 
 export function useElementSize() {
   const ref = useRef(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return undefined;
-    const observer = new ResizeObserver(([entry]) => {
-      const { width, height } = entry.contentRect;
-      setSize({ width: Math.floor(width), height: Math.floor(height) });
-    });
+
+    const measure = () => {
+      const style = getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      const width = Math.floor(rect.width - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight));
+      const height = Math.floor(rect.height - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom));
+      setSize((prev) => (prev.width === width && prev.height === height ? prev : { width, height }));
+    };
+
+    measure();
+    const observer = new ResizeObserver(measure);
     observer.observe(el);
-    return () => observer.disconnect();
+    window.addEventListener('resize', measure);
+    document.addEventListener('visibilitychange', measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', measure);
+      document.removeEventListener('visibilitychange', measure);
+    };
   }, []);
 
   return [ref, size];

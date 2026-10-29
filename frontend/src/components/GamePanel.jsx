@@ -11,6 +11,8 @@ function describeResult(result, color) {
       };
     case 'stalemate':
       return { title: 'Draw', text: 'Stalemate. No legal moves remain.' };
+    case 'repetition':
+      return { title: 'Draw', text: 'Threefold repetition. The same position occurred three times.' };
     case 'abandoned':
       return { title: 'Game ended', text: 'Your opponent disconnected.' };
     case 'lost-connection':
