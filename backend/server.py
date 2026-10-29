@@ -187,8 +187,15 @@ def handle_make_move(data):
             gs.makeMove(player_move)
             emit('move_made', {'move': player_move.getChessNotation(), 'board': gs.board}, room=user_id)
 
+            # Game over after the player's move: nothing for the AI to play
+            ai_replies = gs.getValidMoves()
+            if not ai_replies:
+                emit('valid_moves', {'valid_moves': [], 'board': gs.board, 'turn': 'black',
+                                     'checkmate': gs.checkmate, 'stalemate': gs.stalemate}, room=user_id)
+                return
+
             # AI makes its move
-            ai_move = findBestMove(gs, gs.getValidMoves())
+            ai_move = findBestMove(gs, ai_replies) or ai_replies[0]
             gs.makeMove(ai_move)
             emit('move_made', {'move': ai_move.getChessNotation(), 'board': gs.board}, room=user_id)
 
@@ -197,7 +204,8 @@ def handle_make_move(data):
                 {'start_sq': [move.start_row, move.start_col], 'end_sq': [move.end_row, move.end_col]}
                 for move in gs.getValidMoves()
             ]
-            emit('valid_moves', {'valid_moves': valid_moves, 'board': gs.board}, room=user_id)
+            emit('valid_moves', {'valid_moves': valid_moves, 'board': gs.board, 'turn': 'white',
+                                 'checkmate': gs.checkmate, 'stalemate': gs.stalemate}, room=user_id)
         else:
             emit('invalid_move', {'message': 'Invalid move! Try again.'}, room=user_id)
 
@@ -239,7 +247,8 @@ def handle_make_move(data):
                 {'start_sq': [move.start_row, move.start_col], 'end_sq': [move.end_row, move.end_col]}
                 for move in gs.getValidMoves()
             ]
-            emit('valid_moves', {'valid_moves': valid_moves, 'board': gs.board, 'turn': game['turn']}, room=game_id)
+            emit('valid_moves', {'valid_moves': valid_moves, 'board': gs.board, 'turn': game['turn'],
+                                 'checkmate': gs.checkmate, 'stalemate': gs.stalemate}, room=game_id)
         else:
             emit('invalid_move', {'message': 'Invalid move! Try again.'}, room=user_id)
 
@@ -261,7 +270,10 @@ def handle_hint(data):
         white_to_move = gs.white_to_move
 
         # Get the best move (AI hint) for the current turn
-        hint_move = findBestMove(gs, gs.getValidMoves())
+        candidate_moves = gs.getValidMoves()
+        if not candidate_moves:
+            return
+        hint_move = findBestMove(gs, candidate_moves) or candidate_moves[0]
 
         # Emit the AI hint move back to the user
         emit('hint_move', {'move': hint_move.getChessNotation(), 'white_to_move': white_to_move}, room=user_id)
@@ -285,7 +297,10 @@ def handle_hint(data):
         current_turn = game['turn']
 
         # Get the best move (AI hint) for the current turn
-        hint_move = findBestMove(gs, gs.getValidMoves())
+        candidate_moves = gs.getValidMoves()
+        if not candidate_moves:
+            return
+        hint_move = findBestMove(gs, candidate_moves) or candidate_moves[0]
 
         # Emit the AI hint move to both players
         emit('hint_move', {'move': hint_move.getChessNotation(), 'turn': current_turn}, room=game_id)

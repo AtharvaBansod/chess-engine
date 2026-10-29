@@ -116,6 +116,28 @@ valid_moves = game_state.getValidMoves()
 ---
 
 
+## Setup Instructions
+
+**Backend** (Flask-SocketIO, port 5000)
+
+```bash
+cd backend
+pip install -r requirements.txt
+python server.py
+```
+
+**Frontend** (React + Vite + Bootstrap, port 5173)
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+The frontend connects to `http://localhost:5000` by default. To point it elsewhere, copy `frontend/.env.example` to `frontend/.env` and set `VITE_SERVER_URL`.
+
+---
+
 ## Future Enhancements
 
 * [ ] Openings book and Transposition Tables
